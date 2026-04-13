@@ -1,0 +1,18 @@
+{
+  "name": "cohusdex-chrome-relay",
+  "version": "1.0.0",
+  "description": "CDP-native browser relay for AI-driven Twitter analysis",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "search": "node search.js"
+  },
+  "dependencies": {
+    "chrome-remote-interface": "^2.0.1",
+    "express": "^4.18.2",
+    "ws": "^8.16.0",
+    "better-sqlite3": "^9.4.0",
+    "express-ws": "^5.0.2"
+  }
+}

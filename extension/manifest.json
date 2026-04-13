@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "CoHusdex Browser Relay",
+  "version": "1.0.0",
+  "description": "CDP-native browser relay for AI-driven Twitter analysis. NOTE: For users who cannot start Chrome with --remote-debugging-port. CDP-direct connection (Option A) is recommended for better reliability.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://twitter.com/*",
+    "https://x.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://twitter.com/*", "https://x.com/*"],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "CoHusdex Relay",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["content.js"],
+      "matches": ["https://twitter.com/*", "https://x.com/*"]
+    }
+  ]
+}
