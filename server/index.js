@@ -6,7 +6,7 @@ const { CDPRelay } = require('./relay/cdp-relay');
 const { TwitterSemantic } = require('./relay/twitter-semantic');
 const { IntelligenceEngine } = require('./relay/intelligence-engine');
 const { Delivery } = require('./relay/delivery');
-const { Memory } = require('./relay/memory');
+const MemoryStore = require('./relay/memory');
 const { TabManager } = require('./relay/tab-manager');
 const { setupWebSocket } = require('./api/websocket');
 const { createRouter } = require('./api/routes');
@@ -40,7 +40,7 @@ class ChromeRelayServer {
     this.cdp = new CDPRelay({ host: this.host, port: this.port });
     this.semantic = new TwitterSemantic(this.cdp);
     this.intel = new IntelligenceEngine();
-    this.memory = new Memory();
+    this.memory = new MemoryStore();
     this.delivery = new Delivery({ intelDir: '/home/valentinetech/.openclaw/workspace/chrome-relay/intelligence' });
     this.tabs = new TabManager(this.cdp);
 
@@ -199,8 +199,8 @@ class ChromeRelayServer {
     this.running = false;
     if (this._reportInterval) clearInterval(this._reportInterval);
     if (this._sessionBreakTimer) clearTimeout(this._sessionBreakTimer);
-    await this.cdp.close();
-    this.memory.close();
+    await this.cdp.disconnect();
+    this.memory.save();
     this.httpServer.close();
     console.error('[ChromeRelay] Stopped');
   }
