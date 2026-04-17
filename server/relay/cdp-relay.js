@@ -97,8 +97,8 @@ class CDPRelay extends EventEmitter {
   }
 
   async _ensureConnection() {
+    const tabs = await this._listTabs();
     if (!this._tabId) {
-      const tabs = await this._listTabs();
       // Priority: locked tab (from file) > Twitter/X tab > any usable tab
       const lockedTab = this._tabId ? tabs.find(t => t.id === this._tabId) : null;
       const twitterTab = tabs.find(t => t.url && (t.url.includes('x.com') || t.url.includes('twitter.com')));
@@ -109,7 +109,21 @@ class CDPRelay extends EventEmitter {
       this._wsUrl = target.webSocketDebuggerUrl;
       this._writeTabLock(target.id); // persist so next process reuses same tab
     } else {
-      this._wsUrl = `ws://${this.host}:${this.port}/devtools/page/${this._tabId}`;
+      // Locked tab from file — validate it still exists in this Chrome session
+      const stillAlive = tabs.find(t => t.id === this._tabId);
+      if (stillAlive) {
+        this._wsUrl = `ws://${this.host}:${this.port}/devtools/page/${this._tabId}`;
+      } else {
+        // Tab is dead — clear lock and pick fresh tab
+        this._tabId = null;
+        const twitterTab = tabs.find(t => t.url && (t.url.includes('x.com') || t.url.includes('twitter.com')));
+        const fallbackTab = tabs.find(t => t.url && !t.url.includes('accounts.google.com') && !t.url.includes('accounts.youtube.com'));
+        const target = twitterTab || fallbackTab;
+        if (!target) throw new Error('No suitable Chrome tab found.');
+        this._tabId = target.id;
+        this._wsUrl = target.webSocketDebuggerUrl;
+        this._writeTabLock(target.id);
+      }
     }
 
     return new Promise((resolve, reject) => {
