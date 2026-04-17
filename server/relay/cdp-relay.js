@@ -6,6 +6,10 @@
 const WebSocket = require('ws');
 const { EventEmitter } = require('events');
 const http = require('http');
+const fs = require('fs');
+
+// Persist tab lock so multiple relay processes share the same Chrome tab
+const TAB_LOCK_FILE = '/tmp/cohusdex-relay-tab.lock';
 
 class CDPRelay extends EventEmitter {
   constructor(options = {}) {
@@ -14,13 +18,32 @@ class CDPRelay extends EventEmitter {
     this.port = options.port || 9222;
     this.secure = options.secure || false;
     this._ws = null;
-    this._tabId = null;
+    this._tabId = options.tabId || this._readTabLock() || null;
     this._messageId = 0;
     this._pending = new Map(); // id → {resolve, reject, method}
     this._connected = false;
     this._reconnectDelay = 2000;
     this._reconnectTimer = null;
     this._eventHandlers = new Map(); // method → [handlers]
+  }
+
+  _readTabLock() {
+    try {
+      if (fs.existsSync(TAB_LOCK_FILE)) {
+        const lock = JSON.parse(fs.readFileSync(TAB_LOCK_FILE, 'utf8'));
+        if (lock.tabId && lock.expires > Date.now()) return lock.tabId;
+      }
+    } catch(e) {}
+    return null;
+  }
+
+  _writeTabLock(tabId) {
+    try {
+      fs.writeFileSync(TAB_LOCK_FILE, JSON.stringify({
+        tabId,
+        expires: Date.now() + 8 * 60 * 60 * 1000 // 8 hour lock
+      }));
+    } catch(e) {}
   }
 
   /** Send a CDP command and wait for response */
@@ -74,36 +97,34 @@ class CDPRelay extends EventEmitter {
   }
 
   async _ensureConnection() {
-    // Get the first available tab if none specified
     if (!this._tabId) {
       const tabs = await this._listTabs();
-      const target = tabs.find(t =>
-        t.url && (t.url.includes('x.com') || t.url.includes('twitter.com'))
-      ) || tabs.find(t => t.url && !t.url.includes('accounts.google.com') && !t.url.includes('accounts.youtube.com'));
+      // Priority: locked tab (from file) > Twitter/X tab > any usable tab
+      const lockedTab = this._tabId ? tabs.find(t => t.id === this._tabId) : null;
+      const twitterTab = tabs.find(t => t.url && (t.url.includes('x.com') || t.url.includes('twitter.com')));
+      const fallbackTab = tabs.find(t => t.url && !t.url.includes('accounts.google.com') && !t.url.includes('accounts.youtube.com'));
+      const target = lockedTab || twitterTab || fallbackTab;
       if (!target) throw new Error('No suitable Chrome tab found. Open twitter.com first.');
       this._tabId = target.id;
       this._wsUrl = target.webSocketDebuggerUrl;
+      this._writeTabLock(target.id); // persist so next process reuses same tab
     } else {
-      // Build WebSocket URL from tab ID
       this._wsUrl = `ws://${this.host}:${this.port}/devtools/page/${this._tabId}`;
     }
 
     return new Promise((resolve, reject) => {
       const wsUrl = this._wsUrl || `ws://${this.host}:${this.port}/devtools/page/${this._tabId}`;
       this._ws = new WebSocket(wsUrl);
-
       const connectTimeout = setTimeout(() => {
         this._ws.close();
         reject(new Error('WebSocket connection timeout'));
       }, 15000);
-
       this._ws.on('open', () => {
         clearTimeout(connectTimeout);
         this._connected = true;
         this.emit('connected', { tabId: this._tabId });
         resolve(this);
       });
-
       this._ws.on('message', (data) => {
         try {
           const msg = JSON.parse(data.toString());
@@ -112,13 +133,11 @@ class CDPRelay extends EventEmitter {
           // ignore parse errors
         }
       });
-
       this._ws.on('close', () => {
         this._connected = false;
         this.emit('disconnected');
         this._scheduleReconnect();
       });
-
       this._ws.on('error', (err) => {
         this.emit('error', err);
       });
@@ -141,7 +160,8 @@ class CDPRelay extends EventEmitter {
       // CDP event
       const handlers = this._eventHandlers.get(msg.method) || [];
       handlers.forEach(h => {
-        try { h(msg.params || {}); } catch(e) { /* ignore handler errors */ }
+        try { h(msg.params || {}); }
+        catch(e) { /* ignore handler errors */ }
       });
       this.emit('event', msg.method, msg.params || {});
     }
@@ -162,7 +182,8 @@ class CDPRelay extends EventEmitter {
         let data = '';
         res.on('data', chunk => data += chunk);
         res.on('end', () => {
-          try { resolve(JSON.parse(data)); } catch(e) { reject(e); }
+          try { resolve(JSON.parse(data)); }
+          catch(e) { reject(e); }
         });
       }).on('error', reject);
     });
@@ -216,7 +237,27 @@ class CDPRelay extends EventEmitter {
     return this.evaluate('window.innerHeight');
   }
 
-  isConnected() { return this._connected; }
+  /** Click an element using a CSS selector via JS */
+  async click(selector) {
+    const script = `
+      (function() {
+        var el = document.querySelector('${selector.replace(/'/g, "\\'")}');
+        if (!el) return { error: 'not found: ' + '${selector}' };
+        el.click();
+        return { clicked: el.tagName + ': ' + el.outerHTML.slice(0, 200) };
+      })()
+    `;
+    return this.evaluate(script);
+  }
+
+  /** Click an element by evaluating JavaScript directly */
+  async clickJS(js) {
+    return this.evaluate(`(function() { ${js}; return 'ok'; })()`);
+  }
+
+  isConnected() {
+    return this._connected;
+  }
 
   async disconnect() {
     if (this._reconnectTimer) {
